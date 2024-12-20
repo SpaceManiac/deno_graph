@@ -872,6 +872,8 @@ pub enum Module {
   Npm(NpmModule),
   Node(BuiltInNodeModule),
   External(ExternalModule),
+  Text(TextModule),
+  Binary(BinaryModule),
 }
 
 impl Module {
@@ -883,6 +885,8 @@ impl Module {
       Module::Npm(module) => &module.specifier,
       Module::Node(module) => &module.specifier,
       Module::External(module) => &module.specifier,
+      Module::Text(module) => &module.specifier,
+      Module::Binary(module) => &module.specifier,
     }
   }
 
@@ -930,7 +934,9 @@ impl Module {
     match self {
       crate::Module::Js(m) => Some(&m.source),
       crate::Module::Json(m) => Some(&m.source),
+      crate::Module::Text(m) => Some(&m.source),
       crate::Module::Wasm(_)
+      | crate::Module::Binary(_)
       | crate::Module::Npm(_)
       | crate::Module::Node(_)
       | crate::Module::External(_) => None,
@@ -983,6 +989,40 @@ impl JsonModule {
   /// Return the size in bytes of the content of the JSON module.
   pub fn size(&self) -> usize {
     self.source.as_bytes().len()
+  }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextModule {
+  pub specifier: ModuleSpecifier,
+  #[serde(flatten, skip_serializing_if = "Option::is_none")]
+  pub maybe_cache_info: Option<CacheInfo>,
+  #[serde(rename = "size", serialize_with = "serialize_source")]
+  pub source: Arc<str>,
+}
+
+impl TextModule {
+  /// Return the size in bytes of the content of the text file module.
+  pub fn size(&self) -> usize {
+    self.source.as_bytes().len()
+  }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BinaryModule {
+  pub specifier: ModuleSpecifier,
+  #[serde(flatten, skip_serializing_if = "Option::is_none")]
+  pub maybe_cache_info: Option<CacheInfo>,
+  #[serde(rename = "size", serialize_with = "serialize_source_bytes")]
+  pub source: Arc<[u8]>,
+}
+
+impl BinaryModule {
+  /// Return the size in bytes of the content of the binary file module.
+  pub fn size(&self) -> usize {
+    self.source.len()
   }
 }
 
@@ -1395,6 +1435,8 @@ impl<'a> Iterator for ModuleEntryIterator<'a> {
           self.analyze_module_deps(&module.dependencies);
         }
         Module::Json(_)
+        | Module::Text(_)
+        | Module::Binary(_)
         | Module::External(_)
         | Module::Npm(_)
         | Module::Node(_) => {}
@@ -1984,6 +2026,8 @@ impl ModuleGraph {
         self.resolve_dependency_from_dep(dependency, prefer_types)
       }
       Module::Json(_)
+      | Module::Text(_)
+      | Module::Binary(_)
       | Module::Npm(_)
       | Module::Node(_)
       | Module::External(_) => None,
@@ -2240,6 +2284,14 @@ pub(crate) enum ModuleSourceAndInfo {
     source_dts: Arc<str>,
     module_info: Box<ModuleInfo>,
   },
+  Text {
+    specifier: ModuleSpecifier,
+    source: Arc<str>,
+  },
+  Binary {
+    specifier: ModuleSpecifier,
+    source: Arc<[u8]>,
+  },
 }
 
 impl ModuleSourceAndInfo {
@@ -2248,6 +2300,8 @@ impl ModuleSourceAndInfo {
       Self::Json { specifier, .. } => specifier,
       Self::Js { specifier, .. } => specifier,
       Self::Wasm { specifier, .. } => specifier,
+      Self::Text { specifier, .. } => specifier,
+      Self::Binary { specifier, .. } => specifier,
     }
   }
 
@@ -2256,6 +2310,8 @@ impl ModuleSourceAndInfo {
       Self::Json { .. } => MediaType::Json,
       Self::Js { media_type, .. } => *media_type,
       Self::Wasm { .. } => MediaType::Wasm,
+      Self::Text { .. } => MediaType::Unknown,
+      Self::Binary { .. } => MediaType::Unknown,
     }
   }
 
@@ -2264,6 +2320,8 @@ impl ModuleSourceAndInfo {
       Self::Json { source, .. } => source.as_bytes(),
       Self::Js { source, .. } => source.as_bytes(),
       Self::Wasm { source, .. } => source,
+      Self::Text { source, .. } => source.as_bytes(),
+      Self::Binary { source, .. } => source,
     }
   }
 }
@@ -2442,6 +2500,20 @@ pub(crate) fn parse_module(
         maybe_cache_info: None,
         source,
         media_type: MediaType::Json,
+        specifier,
+      }))
+    }
+    ModuleSourceAndInfo::Text { specifier, source } => {
+      Ok(Module::Text(TextModule {
+        maybe_cache_info: None,
+        source,
+        specifier,
+      }))
+    }
+    ModuleSourceAndInfo::Binary { specifier, source } => {
+      Ok(Module::Binary(BinaryModule {
+        maybe_cache_info: None,
+        source,
         specifier,
       }))
     }
@@ -3920,6 +3992,21 @@ impl<'a, 'graph> Builder<'a, 'graph> {
                         Err(err) => *slot = ModuleSlot::Err(*err),
                       }
                     }
+                    Module::Text(module) => {
+                      match new_source_with_text(
+                        &module.specifier,
+                        content,
+                        None, // no charset for JSR
+                      ) {
+                        Ok(source) => {
+                          module.source = source;
+                        }
+                        Err(err) => *slot = ModuleSlot::Err(*err),
+                      }
+                    }
+                    Module::Binary(module) => {
+                      module.source = content;
+                    }
                     Module::Wasm(module) => {
                       match wasm_module_to_dts(&content) {
                         Ok(source_dts) => {
@@ -3997,6 +4084,14 @@ impl<'a, 'graph> Builder<'a, 'graph> {
               self.loader.get_cache_info(&module.specifier);
           }
           Module::Wasm(module) => {
+            module.maybe_cache_info =
+              self.loader.get_cache_info(&module.specifier);
+          }
+          Module::Text(module) => {
+            module.maybe_cache_info =
+              self.loader.get_cache_info(&module.specifier);
+          }
+          Module::Binary(module) => {
             module.maybe_cache_info =
               self.loader.get_cache_info(&module.specifier);
           }

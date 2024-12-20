@@ -101,6 +101,8 @@ impl<'a> RootSymbol<'a> {
       crate::Module::Wasm(wasm_module) => self.analyze_wasm_module(wasm_module),
       crate::Module::Npm(_)
       | crate::Module::Node(_)
+      | crate::Module::Text(_) // TODO: is this where we say text=string
+      | crate::Module::Binary(_) // TODO: is this where we say binary=string
       | crate::Module::External(_) => None,
     }
   }

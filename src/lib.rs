@@ -58,6 +58,7 @@ pub use fast_check::FastCheckDiagnostic;
 pub use fast_check::FastCheckDiagnosticRange;
 #[cfg(feature = "fast_check")]
 pub use fast_check::FastCheckModule;
+pub use graph::BinaryModule;
 #[cfg(feature = "fast_check")]
 pub use graph::BuildFastCheckTypeGraphOptions;
 pub use graph::BuildOptions;
@@ -86,6 +87,7 @@ pub use graph::Range;
 pub use graph::Resolution;
 pub use graph::ResolutionError;
 pub use graph::ResolutionResolved;
+pub use graph::TextModule;
 pub use graph::TypesDependency;
 pub use graph::WalkOptions;
 pub use graph::WasmModule;
