@@ -2389,6 +2389,23 @@ pub(crate) async fn parse_module_source_and_info(
         actual_media_type: media_type,
         expected_media_type: MediaType::Json,
       });
+    } else if attribute_type.kind == "text" {
+      return match crate::source::decode_source(&opts.specifier, opts.content, maybe_charset) {
+        Ok(text) => Ok(ModuleSourceAndInfo::Text {
+          specifier: opts.specifier,
+          source: text,
+        }),
+        Err(err) => Err(ModuleError::LoadingErr(
+          opts.specifier,
+          None,
+          ModuleLoadError::Decode(Arc::new(err)),
+        )),
+      };
+    } else if attribute_type.kind == "binary" {
+      return Ok(ModuleSourceAndInfo::Binary {
+        specifier: opts.specifier,
+        source: opts.content,
+      });
     } else {
       return Err(ModuleError::UnsupportedImportAttributeType {
         specifier: opts.specifier,
