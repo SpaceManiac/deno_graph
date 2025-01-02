@@ -2358,40 +2358,9 @@ pub(crate) async fn parse_module_source_and_info(
 
   // here we check any media types that should have assertions made against them
   // if they aren't the root and add them to the graph, otherwise we continue
-  if media_type == MediaType::Json
-    && (opts.is_root
-      || opts.is_dynamic_branch
-      || matches!(
-        opts.maybe_attribute_type.map(|t| t.kind.as_str()),
-        Some("json")
-      ))
-  {
-    return match crate::source::decode_source(
-      &opts.specifier,
-      opts.content,
-      maybe_charset,
-    ) {
-      Ok(text) => Ok(ModuleSourceAndInfo::Json {
-        specifier: opts.specifier,
-        source: text,
-      }),
-      Err(err) => Err(ModuleError::LoadingErr(
-        opts.specifier,
-        None,
-        ModuleLoadError::Decode(Arc::new(err)),
-      )),
-    };
-  }
-
-  if let Some(attribute_type) = opts.maybe_attribute_type {
-    if attribute_type.kind == "json" {
-      return Err(ModuleError::InvalidTypeAssertion {
-        specifier: opts.specifier.clone(),
-        range: attribute_type.range.clone(),
-        actual_media_type: media_type,
-        expected_media_type: MediaType::Json,
-      });
-    } else if attribute_type.kind == "text" {
+  match (media_type, opts.maybe_attribute_type.map(|attr| (&attr.range, attr.kind.as_str()))) {
+    // "text" and "binary" take precedence since they're permitted for all content-types.
+    (_, Some((_, "text"))) => {
       return match crate::source::decode_source(&opts.specifier, opts.content, maybe_charset) {
         Ok(text) => Ok(ModuleSourceAndInfo::Text {
           specifier: opts.specifier,
@@ -2403,18 +2372,51 @@ pub(crate) async fn parse_module_source_and_info(
           ModuleLoadError::Decode(Arc::new(err)),
         )),
       };
-    } else if attribute_type.kind == "binary" {
+    },
+    (_, Some((_, "binary"))) => {
       return Ok(ModuleSourceAndInfo::Binary {
         specifier: opts.specifier,
         source: opts.content,
       });
-    } else {
-      return Err(ModuleError::UnsupportedImportAttributeType {
-        specifier: opts.specifier,
-        range: attribute_type.range.clone(),
-        kind: attribute_type.kind.clone(),
+    },
+    // JSON files are only treated as JSON if `type: "json"` is there, OR if
+    // they're the root, since `type: "json"` *might* not be specifiable there.
+    (MediaType::Json, kind) if opts.is_root || opts.is_dynamic_branch || matches!(kind, Some((_, "json"))) => {
+      return match crate::source::decode_source(
+        &opts.specifier,
+        opts.content,
+        maybe_charset,
+      ) {
+        Ok(text) => Ok(ModuleSourceAndInfo::Json {
+          specifier: opts.specifier,
+          source: text,
+        }),
+        Err(err) => Err(ModuleError::LoadingErr(
+          opts.specifier,
+          None,
+          ModuleLoadError::Decode(Arc::new(err)),
+        )),
+      };
+    }
+    // `type: "json"` cannot import non-JSON files.
+    (_, Some((range, "json"))) => {
+      return Err(ModuleError::InvalidTypeAssertion {
+        specifier: opts.specifier.clone(),
+        range: range.clone(),
+        actual_media_type: media_type,
+        expected_media_type: MediaType::Json,
       });
     }
+    // Unknown `type` values are forbidden.
+    (_, Some((range, kind))) => {
+      return Err(ModuleError::UnsupportedImportAttributeType {
+        specifier: opts.specifier,
+        range: range.clone(),
+        kind: kind.to_owned(),
+      });
+    }
+    // Other content types are permitted with no attribute.
+    (_, None) => {}
   }
 
   if matches!(media_type, MediaType::Cjs | MediaType::Cts)
