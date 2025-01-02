@@ -1264,6 +1264,8 @@ pub struct BuildOptions<'a> {
   pub npm_resolver: Option<&'a dyn NpmResolver>,
   pub reporter: Option<&'a dyn Reporter>,
   pub resolver: Option<&'a dyn Resolver>,
+  /// The `with: { "type": x }` value of the root imports of this graph.
+  pub maybe_attribute_type: Option<&'a str>,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -3597,13 +3599,14 @@ impl<'a, 'graph> Builder<'a, 'graph> {
       executor: options.executor,
       resolved_roots: Default::default(),
     };
-    builder.fill(roots, options.imports).await;
+    builder.fill(roots, options.imports, options.maybe_attribute_type).await;
   }
 
   async fn fill(
     &mut self,
     roots: Vec<ModuleSpecifier>,
     imports: Vec<ReferrerImports>,
+    maybe_attribute_type: Option<&str>,
   ) {
     let provided_roots = roots;
     let provided_imports = imports;
@@ -3621,7 +3624,15 @@ impl<'a, 'graph> Builder<'a, 'graph> {
     self.graph.roots.extend(roots.clone());
 
     for root in roots {
-      self.load(&root, None, self.in_dynamic_branch, true, None, None);
+      let maybe_attribute_type: Option<AttributeTypeWithRange> = maybe_attribute_type.map(|t| AttributeTypeWithRange {
+        range: Range {
+          specifier: root.clone(),
+          range: PositionRange::zeroed(),
+          resolution_mode: None,
+        },
+        kind: t.to_owned(),
+      });
+      self.load(&root, None, self.in_dynamic_branch, true, maybe_attribute_type, None);
     }
 
     // process any imports that are being added to the graph.
@@ -3682,7 +3693,7 @@ impl<'a, 'graph> Builder<'a, 'graph> {
       if self.state.pending.is_empty() {
         let should_restart = self.resolve_pending_jsr_specifiers().await;
         if should_restart {
-          self.restart(provided_roots, provided_imports).await;
+          self.restart(provided_roots, provided_imports, maybe_attribute_type).await;
           return;
         }
 
@@ -4122,6 +4133,7 @@ impl<'a, 'graph> Builder<'a, 'graph> {
     &mut self,
     roots: Vec<ModuleSpecifier>,
     imports: Vec<ReferrerImports>,
+    maybe_attribute_type: Option<&str>,
   ) -> LocalBoxFuture<()> {
     // if restarting is allowed, then the graph will have been empty at the start
     *self.graph = ModuleGraph::new(self.graph.graph_kind);
@@ -4129,7 +4141,8 @@ impl<'a, 'graph> Builder<'a, 'graph> {
     self.fill_pass_mode = FillPassMode::CacheBusting;
 
     // boxed due to async recursion
-    async move { self.fill(roots, imports).await }.boxed_local()
+    let maybe_attribute_type = maybe_attribute_type.map(str::to_owned);
+    async move { self.fill(roots, imports, maybe_attribute_type.as_deref()).await }.boxed_local()
   }
 
   fn resolve_jsr_version(
